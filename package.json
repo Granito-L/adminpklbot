@@ -1,0 +1,12 @@
+{
+  "name": "bot-absensi-pkl",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.15.3",
+    "googleapis": "^126.0.0"
+  }
+}
