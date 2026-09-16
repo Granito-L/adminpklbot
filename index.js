@@ -1,12 +1,13 @@
-const { Telegraf, Markup, session } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
 const { google } = require('googleapis');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
-// Inisialisasi Bot
+// 1. Inisialisasi Bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
-bot.use(session());
 
-// Inisialisasi Google Sheets API
+// 2. Inisialisasi Google Sheets API
 const auth = new google.auth.GoogleAuth({
   credentials: {
     client_email: process.env.GOOGLE_CLIENT_EMAIL,
@@ -16,10 +17,15 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: 'v4', auth });
 
-// Database sementara untuk simpan data user (Session)
-const userSessions = {};
+// 3. Database Simpel (Disimpan ke File JSON di Railway)
+const dbFile = path.join(__dirname, 'users_db.json');
+let db = fs.existsSync(dbFile) ? JSON.parse(fs.readFileSync(dbFile)) : {};
 
-// Daftar Kelas
+function saveDB() {
+  fs.writeFileSync(dbFile, JSON.stringify(db, null, 2));
+}
+
+// 4. Daftar Kelas
 const daftarKelas = [
   ['XII PPLG 1', 'XII PPLG 2'],
   ['XII PPLG 3', 'XII PPLG 4'],
@@ -29,67 +35,166 @@ const daftarKelas = [
   ['XII TJKT 4', 'XII TJKT 5'],
 ];
 
-// 1. PERINTAH /start (Menampilkan Pilihan Kelas)
+// 5. COMMAND /start
 bot.start((ctx) => {
   const userId = ctx.from.id;
-  userSessions[userId] = userSessions[userId] || {};
+  
+  if (db[userId] && db[userId].nama) {
+    return ctx.replyWithMarkdown(
+`✅ *PROFIL KAMU SUDAH TERDAFTAR!*
 
-  const infoProfil = userSessions[userId].kelas && userSessions[userId].noAbsen
-    ? `✅ *Profil Kamu Terdaftar:*\n• Kelas: ${userSessions[userId].kelas}\n• No. Absen: ${userSessions[userId].noAbsen}\n\n_Pilih kelas di bawah jika ingin mengubah profil._`
-    : `🤖 *BOT ABSENSI PKL TELKOM SCHOOL*\n\nSilakan pilih kelas kamu di bawah ini untuk memulai registrasi:`;
+👤 *Nama:* ${db[userId].nama}
+🏫 *Kelas:* ${db[userId].kelas}
+🔢 *No. Absen:* ${db[userId].noAbsen}
+
+📸 *Cara Absen Hadir:* Langsung kirim **FOTO KEGIATAN** kamu di chat ini!
+📝 *Cara Izin/Sakit:* Ketik /izin atau /sakit
+
+_Ketik /reset jika ingin mengubah data diri._`
+    );
+  }
 
   const buttons = daftarKelas.map((row) =>
-    row.map((k) => Markup.button.callback(k, `set_kelas_${k}`))
+    row.map((k) => Markup.button.callback(k, `reg_kelas_${k}`))
   );
 
-  ctx.replyWithMarkdown(infoProfil, Markup.inlineKeyboard(buttons));
+  ctx.replyWithMarkdown(
+`🤖 *BOT ABSENSI PKL TELKOM SCHOOL*
+
+Kamu belum terdaftar. Silakan pilih kelas kamu di bawah ini:`,
+    Markup.inlineKeyboard(buttons)
+  );
 });
 
-// 2. TANGKAP PILIHAN KELAS
-bot.action(/^set_kelas_/, (ctx) => {
+// 6. COMMAND RESET PROFIL
+bot.command('reset', (ctx) => {
   const userId = ctx.from.id;
-  const kelas = ctx.match.input.replace('set_kelas_', '');
+  delete db[userId];
+  saveDB();
+  ctx.reply('🔄 Profil berhasil di-reset. Ketik /start untuk mendaftar ulang.');
+});
+
+// 7. COMMAND /izin & /sakit
+bot.command('izin', (ctx) => {
+  const userId = ctx.from.id;
+  if (!db[userId] || !db[userId].nama) return ctx.reply('⚠️ Kamu belum daftar profil! Ketik /start dulu.');
   
-  userSessions[userId] = userSessions[userId] || {};
-  userSessions[userId].kelas = kelas;
-  userSessions[userId].step = 'WAITING_NO_ABSEN';
+  db[userId].step = 'WAITING_ALASAN_IZIN';
+  saveDB();
+  ctx.reply('📝 Silakan ketik *ALASAN IZIN* kamu:', { parse_mode: 'Markdown' });
+});
+
+bot.command('sakit', (ctx) => {
+  const userId = ctx.from.id;
+  if (!db[userId] || !db[userId].nama) return ctx.reply('⚠️ Kamu belum daftar profil! Ketik /start dulu.');
+  
+  db[userId].step = 'WAITING_ALASAN_SAKIT';
+  saveDB();
+  ctx.reply('🤒 Silakan ketik *ALASAN SAKIT* kamu (dan melampirkan surat/keterangan):', { parse_mode: 'Markdown' });
+});
+
+// 8. PROCESS REGISTRASI KELAS
+bot.action(/^reg_kelas_/, (ctx) => {
+  const userId = ctx.from.id;
+  const kelas = ctx.match.input.replace('reg_kelas_', '');
+
+  db[userId] = db[userId] || {};
+  db[userId].kelas = kelas;
+  db[userId].step = 'WAITING_NO_ABSEN';
+  saveDB();
 
   ctx.answerCbQuery();
-  ctx.reply(
-    `✅ *Kelas dipilih: ${kelas}*\n\nSekarang ketik *NOMOR ABSEN* kamu (Contoh: 05 atau 12):`,
-    { parse_mode: 'Markdown' }
-  );
+  ctx.reply(`✅ *Kelas dipilih: ${kelas}*\n\nSekarang ketik *NOMOR ABSEN* kamu (Contoh: 05 atau 12):`, { parse_mode: 'Markdown' });
 });
 
-// 3. TANGKAP INPUT NOMOR ABSEN & NAMA
-bot.on('text', (ctx) => {
+// 9. PROCESS TEXT INPUT (NO ABSEN, NAMA, ALASAN)
+bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
-  const sessionUser = userSessions[userId];
+  const user = db[userId];
+  if (!user || !user.step) return;
 
-  if (!sessionUser || !sessionUser.step) return;
+  const text = ctx.message.text.trim();
 
-  if (sessionUser.step === 'WAITING_NO_ABSEN') {
-    sessionUser.noAbsen = ctx.message.text.trim();
-    sessionUser.step = 'WAITING_NAMA';
-    ctx.reply('🎉 *REGISTRASI KELAS BERHASIL!*\n\nSekarang ketik *NAMA LENGKAP* kamu:', { parse_mode: 'Markdown' });
-  } else if (sessionUser.step === 'WAITING_NAMA') {
-    sessionUser.nama = ctx.message.text.trim();
-    sessionUser.step = 'READY_TO_ABSEN';
-    
-    ctx.reply(
-      `🎉 *REGISTRASI BERHASIL!*\n\n👤 *Nama:* ${sessionUser.nama}\n🏫 *Kelas:* ${sessionUser.kelas}\n🔢 *No. Absen:* ${sessionUser.noAbsen}\n\nSekarang, silakan *kirimkan LOKASI (GPS)* kamu lewat tombol attachment Telegram untuk melakukan absensi!`,
-      { parse_mode: 'Markdown' }
+  if (user.step === 'WAITING_NO_ABSEN') {
+    user.noAbsen = text;
+    user.step = 'WAITING_NAMA';
+    saveDB();
+    ctx.reply('Sekarang ketik *NAMA LENGKAP* kamu:', { parse_mode: 'Markdown' });
+  } 
+  else if (user.step === 'WAITING_NAMA') {
+    user.nama = text;
+    user.step = 'IDLE';
+    saveDB();
+    ctx.replyWithMarkdown(
+`🎉 *REGISTRASI BERHASIL!*
+
+👤 *Nama:* ${user.nama}
+🏫 *Kelas:* ${user.kelas}
+🔢 *No. Absen:* ${user.noAbsen}
+
+📸 Silakan langsung kirim *FOTO KEGIATAN* kamu di chat ini untuk melakukan Absensi Hadir!`
     );
+  }
+  else if (user.step === 'WAITING_ALASAN_IZIN' || user.step === 'WAITING_ALASAN_SAKIT') {
+    const status = user.step === 'WAITING_ALASAN_IZIN' ? 'IZIN' : 'SAKIT';
+    user.step = 'IDLE';
+    saveDB();
+
+    const waktuNow = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+    
+    try {
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: process.env.SPREADSHEET_ID,
+        range: `'${user.kelas}'!A:G`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [[waktuNow, user.noAbsen, user.nama, status, `Alasan: ${text}`, '-', '-']]
+        }
+      });
+      ctx.reply(`✅ *BERHASIL DICATAT!*\n\nStatus: *${status}*\nAlasan: ${text}`, { parse_mode: 'Markdown' });
+    } catch (err) {
+      ctx.reply(`❌ Gagal menyimpan ke Sheets: ${err.message}`);
+    }
   }
 });
 
-// 4. TANGKAP LOKASI & PROSES SIMPAN KE SHEET + REVERSE GEOCODING
+// 10. PROCESS FOTO KEGIATAN
+bot.on('photo', async (ctx) => {
+  const userId = ctx.from.id;
+  const user = db[userId];
+
+  if (!user || !user.nama) {
+    return ctx.reply('⚠️ Kamu belum terdaftar! Ketik /start terlebih dahulu.');
+  }
+
+  const msgLoading = await ctx.reply('⏳ *Memproses foto kegiatan...*', { parse_mode: 'Markdown' });
+
+  try {
+    const photo = ctx.message.photo[ctx.message.photo.length - 1];
+    const fileLink = await ctx.telegram.getFileLink(photo.file_id);
+
+    user.tempFotoUrl = fileLink.href;
+    user.tempCaption = ctx.message.caption || 'Kegiatan PKL';
+    user.step = 'WAITING_LOCATION';
+    saveDB();
+
+    ctx.deleteMessage(msgLoading.message_id).catch(() => {});
+    ctx.reply(
+      `📸 *Foto Berhasil Diterima!*\n\nSekarang, silakan *Share Current Location (GPS)* kamu lewat menu attachment Telegram untuk menyelesaikan absensi.`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    ctx.reply(`❌ Gagal memproses foto: ${err.message}`);
+  }
+});
+
+// 11. PROCESS LOKASI & REKAP KESELURUHAN
 bot.on('location', async (ctx) => {
   const userId = ctx.from.id;
-  const sessionUser = userSessions[userId];
+  const user = db[userId];
 
-  if (!sessionUser || !sessionUser.kelas) {
-    return ctx.reply('⚠️ Kamu belum memilih kelas! Ketik /start untuk memilih kelas terlebih dahulu.');
+  if (!user || user.step !== 'WAITING_LOCATION') {
+    return ctx.reply('⚠️ Silakan kirim foto kegiatan terlebih dahulu sebelum mengirim lokasi.');
   }
 
   const msgLoading = await ctx.reply('⏳ *Memproses alamat lokasi & menyimpan ke sheet kelas...*', { parse_mode: 'Markdown' });
@@ -98,7 +203,6 @@ bot.on('location', async (ctx) => {
   const lon = ctx.message.location.longitude;
   const mapsUrl = `https://maps.google.com/?q=${lat},${lon}`;
 
-  // Ambil Alamat Asli dari Koordinat (OpenStreetMap API Gratis)
   let alamatLengkap = 'Alamat tidak ditemukan';
   try {
     const geoRes = await axios.get(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`, {
@@ -106,41 +210,41 @@ bot.on('location', async (ctx) => {
     });
     alamatLengkap = geoRes.data.display_name || alamatLengkap;
   } catch (err) {
-    console.error('Error Reverse Geocode:', err.message);
+    console.error('Geo Error:', err.message);
   }
 
-  // Waktu WIB
   const waktuNow = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 
-  // Simpan ke Google Sheets di Tab Nama Kelas (Misal: XII TJKT 1)
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SPREADSHEET_ID,
-      range: `'${sessionUser.kelas}'!A:G`, // Masuk otomatis ke Tab Sheet sesuai Kelas
+      range: `'${user.kelas}'!A:G`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
-        values: [[waktuNow, sessionUser.noAbsen, sessionUser.nama, 'HADIR', alamatLengkap, mapsUrl]]
+        values: [[waktuNow, user.noAbsen, user.nama, `HADIR (${user.tempCaption})`, alamatLengkap, mapsUrl, user.tempFotoUrl]]
       }
     });
 
-    // Hapus pesan loading
+    user.step = 'IDLE';
+    saveDB();
+
     ctx.deleteMessage(msgLoading.message_id).catch(() => {});
 
-    // Balasan Ringkasan Berhasil (Persis Gambar 1)
     const replyText = 
 `✅ *ABSENSI BERHASIL!*
 
-📁 *Tab Sheet:* ${sessionUser.kelas}
+📁 *Tab Sheet:* ${user.kelas}
 📅 *Waktu:* ${waktuNow}
-📝 *Detail:* ${sessionUser.noAbsen} ${sessionUser.nama} - HADIR
+📝 *Detail:* ${user.noAbsen} ${user.nama} - HADIR
+📌 *Kegiatan:* ${user.tempCaption}
 📍 *Alamat:* ${alamatLengkap}
-🔗 *Maps:* [Lihat Titik GPS](${mapsUrl})`;
+🔗 *Maps:* [Lihat Titik GPS](${mapsUrl})
+🖼️ *Foto:* [Lihat Bukti Foto](${user.tempFotoUrl})`;
 
     ctx.replyWithMarkdown(replyText, { disable_web_page_preview: false });
 
   } catch (err) {
-    console.error('Error Sheets:', err);
-    ctx.reply(`❌ Gagal menyimpan ke Google Sheets: ${err.message}. Pastikan Tab Sheet bernama "${sessionUser.kelas}" sudah dibuat di Google Sheets kamu!`);
+    ctx.reply(`❌ Gagal menyimpan ke Google Sheets: ${err.message}`);
   }
 });
 
