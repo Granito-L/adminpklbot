@@ -6,6 +6,15 @@ const path = require('path');
 
 // 1. Inisialisasi Bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
+// Function pembantu buat ngerapihin Private Key secara otomatis
+function formatPrivateKey(key) {
+  if (!key) return undefined;
+  // Hapus tanda petik di awal/akhir kalau keikut
+  let formatted = key.replace(/^"(.*)"$/, '$1');
+  // Ubah literal \n jadi newline asli jika belum terkonversi
+  formatted = formatted.replace(/\\n/g, '\n');
+  return formatted;
+}
 
 // 2. Inisialisasi Google Sheets API
 const auth = new google.auth.GoogleAuth({
