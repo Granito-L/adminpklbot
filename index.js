@@ -16,23 +16,23 @@ function formatPrivateKey(key) {
   return formatted;
 }
 
-// 2. Inisialisasi Google Sheets API
-const auth = new google.auth.GoogleAuth({
-  credentials: {
+// Inisialisasi Google Sheets API via Base64 (Anti-Error Decoder)
+let credentials = {};
+if (process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
+  const jsonString = Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf-8');
+  credentials = JSON.parse(jsonString);
+} else {
+  credentials = {
     client_email: process.env.GOOGLE_CLIENT_EMAIL,
     private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  },
+  };
+}
+
+const auth = new google.auth.GoogleAuth({
+  credentials,
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 const sheets = google.sheets({ version: 'v4', auth });
-
-// 3. Database Simpel (Disimpan ke File JSON di Railway)
-const dbFile = path.join(__dirname, 'users_db.json');
-let db = fs.existsSync(dbFile) ? JSON.parse(fs.readFileSync(dbFile)) : {};
-
-function saveDB() {
-  fs.writeFileSync(dbFile, JSON.stringify(db, null, 2));
-}
 
 // 4. Daftar Kelas
 const daftarKelas = [
