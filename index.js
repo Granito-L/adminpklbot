@@ -1,104 +1,151 @@
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf, Markup, session } = require('telegraf');
 const { google } = require('googleapis');
+const axios = require('axios');
 
-// 1. Inisialisasi Bot dengan Token dari Environment Variable
+// Inisialisasi Bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
+bot.use(session());
 
-// 2. Autentikasi Google Sheets API (Jika bot butuh baca data absen)
-const getFormattedPrivateKey = () => {
-  let key = process.env.GOOGLE_PRIVATE_KEY || '';
-  if (key.startsWith('"') && key.endsWith('"')) key = key.slice(1, -1);
-  return key.replace(/\\n/g, '\n');
-};
-
+// Inisialisasi Google Sheets API
 const auth = new google.auth.GoogleAuth({
   credentials: {
     client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: getFormattedPrivateKey(),
+    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
   },
-  scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
-
 const sheets = google.sheets({ version: 'v4', auth });
 
-// ── PERINTAH BOT ──────────────────────────────────────────
+// Database sementara untuk simpan data user (Session)
+const userSessions = {};
 
-// Perintah /start
+// Daftar Kelas
+const daftarKelas = [
+  ['XII PPLG 1', 'XII PPLG 2'],
+  ['XII PPLG 3', 'XII PPLG 4'],
+  ['XII PPLG 5', 'XII PPLG 6'],
+  ['XII PPLG 7', 'XII TJKT 1'],
+  ['XII TJKT 2', 'XII TJKT 3'],
+  ['XII TJKT 4', 'XII TJKT 5'],
+];
+
+// 1. PERINTAH /start (Menampilkan Pilihan Kelas)
 bot.start((ctx) => {
-  ctx.reply(
-    `Halo ${ctx.from.first_name}! 👋\n\nSelamat datang di *Bot Sistem Absensi PKL*.\nSilakan pilih menu di bawah ini:`,
-    {
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [Markup.button.url('🌐 Buka Web Absensi', process.env.WEB_URL || 'https://vercel.com')],
-        [Markup.button.callback('📊 Cek Status Absen', 'CEK_ABSEN')],
-      ]),
-    }
+  const userId = ctx.from.id;
+  userSessions[userId] = userSessions[userId] || {};
+
+  const infoProfil = userSessions[userId].kelas && userSessions[userId].noAbsen
+    ? `✅ *Profil Kamu Terdaftar:*\n• Kelas: ${userSessions[userId].kelas}\n• No. Absen: ${userSessions[userId].noAbsen}\n\n_Pilih kelas di bawah jika ingin mengubah profil._`
+    : `🤖 *BOT ABSENSI PKL TELKOM SCHOOL*\n\nSilakan pilih kelas kamu di bawah ini untuk memulai registrasi:`;
+
+  const buttons = daftarKelas.map((row) =>
+    row.map((k) => Markup.button.callback(k, `set_kelas_${k}`))
   );
+
+  ctx.replyWithMarkdown(infoProfil, Markup.inlineKeyboard(buttons));
 });
 
-// Perintah /help
-bot.help((ctx) => {
+// 2. TANGKAP PILIHAN KELAS
+bot.action(/^set_kelas_/, (ctx) => {
+  const userId = ctx.from.id;
+  const kelas = ctx.match.input.replace('set_kelas_', '');
+  
+  userSessions[userId] = userSessions[userId] || {};
+  userSessions[userId].kelas = kelas;
+  userSessions[userId].step = 'WAITING_NO_ABSEN';
+
+  ctx.answerCbQuery();
   ctx.reply(
-    '📌 *Panduan Penggunaan Bot:*\n\n' +
-    '1. `/start` - Membuka menu utama\n' +
-    '2. `/cek [Kelas] [No_Absen]` - Cek riwayat absen (Contoh: `/cek XII_TJKT_1 15`)\n' +
-    '3. `/info` - Informasi sistem PKL',
+    `✅ *Kelas dipilih: ${kelas}*\n\nSekarang ketik *NOMOR ABSEN* kamu (Contoh: 05 atau 12):`,
     { parse_mode: 'Markdown' }
   );
 });
 
-// Fitur Cek Absen dari Google Sheets (Contoh Perintah /cek)
-bot.command('cek', async (ctx) => {
-  const args = ctx.message.text.split(' ');
-  const kelas = args[1];
-  const noAbsen = args[2];
+// 3. TANGKAP INPUT NOMOR ABSEN & NAMA
+bot.on('text', (ctx) => {
+  const userId = ctx.from.id;
+  const sessionUser = userSessions[userId];
 
-  if (!kelas || !noAbsen) {
-    return ctx.reply('⚠️ Format salah! Gunakan format: `/cek [Nama_Tab_Kelas] [No_Absen]`\nContoh: `/cek XII_TJKT_1 15`', { parse_mode: 'Markdown' });
-  }
+  if (!sessionUser || !sessionUser.step) return;
 
-  try {
-    ctx.reply('⏳ Mengambil data dari Google Sheets...');
+  if (sessionUser.step === 'WAITING_NO_ABSEN') {
+    sessionUser.noAbsen = ctx.message.text.trim();
+    sessionUser.step = 'WAITING_NAMA';
+    ctx.reply('🎉 *REGISTRASI KELAS BERHASIL!*\n\nSekarang ketik *NAMA LENGKAP* kamu:', { parse_mode: 'Markdown' });
+  } else if (sessionUser.step === 'WAITING_NAMA') {
+    sessionUser.nama = ctx.message.text.trim();
+    sessionUser.step = 'READY_TO_ABSEN';
     
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.SPREADSHEET_ID,
-      range: `'${kelas.replace(/_/g, ' ')}'!A:H`,
-    });
-
-    const rows = response.data.values;
-    if (!rows || rows.length === 0) {
-      return ctx.reply(`❌ Data untuk kelas ${kelas} tidak ditemukan.`);
-    }
-
-    // Cari baris berdasarkan No. Absen
-    const dataSiswa = rows.filter(row => row[1] == noAbsen);
-
-    if (dataSiswa.length === 0) {
-      return ctx.reply(`❌ Belum ada data absensi untuk No. Absen ${noAbsen} di kelas ${kelas}.`);
-    }
-
-    const absenTerakhir = dataSiswa[dataSiswa.length - 1]; // Ambil data paling baru
-    const teksBalasan = 
-      `📋 *Riwayat Absen Terakhir*\n\n` +
-      `👤 *Nama:* ${absenTerakhir[2]}\n` +
-      `🕒 *Waktu:* ${absenTerakhir[0]}\n` +
-      `📌 *Status:* ${absenTerakhir[3]}\n` +
-      `📍 *Alamat:* ${absenTerakhir[4] || 'Tidak ada'}\n` +
-      `🖼️ [Lihat Foto Absen](${absenTerakhir[6] || ''})`;
-
-    ctx.replyWithMarkdown(teksBalasan);
-
-  } catch (err) {
-    console.error(err);
-    ctx.reply('❌ Gagal mengambil data. Pastikan nama kelas benar.');
+    ctx.reply(
+      `🎉 *REGISTRASI BERHASIL!*\n\n👤 *Nama:* ${sessionUser.nama}\n🏫 *Kelas:* ${sessionUser.kelas}\n🔢 *No. Absen:* ${sessionUser.noAbsen}\n\nSekarang, silakan *kirimkan LOKASI (GPS)* kamu lewat tombol attachment Telegram untuk melakukan absensi!`,
+      { parse_mode: 'Markdown' }
+    );
   }
 });
 
-// Jalankan Bot
-bot.launch();
-console.log('🤖 Bot Telegram Absensi PKL Aktif...');
+// 4. TANGKAP LOKASI & PROSES SIMPAN KE SHEET + REVERSE GEOCODING
+bot.on('location', async (ctx) => {
+  const userId = ctx.from.id;
+  const sessionUser = userSessions[userId];
 
-// Graceful Shutdown
+  if (!sessionUser || !sessionUser.kelas) {
+    return ctx.reply('⚠️ Kamu belum memilih kelas! Ketik /start untuk memilih kelas terlebih dahulu.');
+  }
+
+  const msgLoading = await ctx.reply('⏳ *Memproses alamat lokasi & menyimpan ke sheet kelas...*', { parse_mode: 'Markdown' });
+
+  const lat = ctx.message.location.latitude;
+  const lon = ctx.message.location.longitude;
+  const mapsUrl = `https://maps.google.com/?q=${lat},${lon}`;
+
+  // Ambil Alamat Asli dari Koordinat (OpenStreetMap API Gratis)
+  let alamatLengkap = 'Alamat tidak ditemukan';
+  try {
+    const geoRes = await axios.get(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`, {
+      headers: { 'User-Agent': 'TelegramBotAbsensiPKL' }
+    });
+    alamatLengkap = geoRes.data.display_name || alamatLengkap;
+  } catch (err) {
+    console.error('Error Reverse Geocode:', err.message);
+  }
+
+  // Waktu WIB
+  const waktuNow = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+
+  // Simpan ke Google Sheets di Tab Nama Kelas (Misal: XII TJKT 1)
+  try {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: process.env.SPREADSHEET_ID,
+      range: `'${sessionUser.kelas}'!A:G`, // Masuk otomatis ke Tab Sheet sesuai Kelas
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[waktuNow, sessionUser.noAbsen, sessionUser.nama, 'HADIR', alamatLengkap, mapsUrl]]
+      }
+    });
+
+    // Hapus pesan loading
+    ctx.deleteMessage(msgLoading.message_id).catch(() => {});
+
+    // Balasan Ringkasan Berhasil (Persis Gambar 1)
+    const replyText = 
+`✅ *ABSENSI BERHASIL!*
+
+📁 *Tab Sheet:* ${sessionUser.kelas}
+📅 *Waktu:* ${waktuNow}
+📝 *Detail:* ${sessionUser.noAbsen} ${sessionUser.nama} - HADIR
+📍 *Alamat:* ${alamatLengkap}
+🔗 *Maps:* [Lihat Titik GPS](${mapsUrl})`;
+
+    ctx.replyWithMarkdown(replyText, { disable_web_page_preview: false });
+
+  } catch (err) {
+    console.error('Error Sheets:', err);
+    ctx.reply(`❌ Gagal menyimpan ke Google Sheets: ${err.message}. Pastikan Tab Sheet bernama "${sessionUser.kelas}" sudah dibuat di Google Sheets kamu!`);
+  }
+});
+
+// Launch Bot
+bot.launch().then(() => console.log('🤖 Bot Absensi PKL Aktif di Railway!'));
+
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
