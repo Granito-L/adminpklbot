@@ -21,7 +21,6 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // 3. Helper Parser Kredensial Anti-Fail
 function getGoogleCredentials() {
-  // Opsi A: Jika pakai GOOGLE_SERVICE_ACCOUNT_BASE64
   if (process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
     try {
       const decoded = Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_BASE64.trim(), 'base64').toString('utf-8');
@@ -31,13 +30,10 @@ function getGoogleCredentials() {
     }
   }
 
-  // Opsi B: Jika pakai GOOGLE_PRIVATE_KEY & GOOGLE_CLIENT_EMAIL biasa
   let rawKey = process.env.GOOGLE_PRIVATE_KEY || '';
-  // Bersihkan tanda petik pembungkus (jika ada)
   if (rawKey.startsWith('"') && rawKey.endsWith('"')) {
     rawKey = rawKey.slice(1, -1);
   }
-  // Konversi literal \n menjadi character newline asli
   const formattedPrivateKey = rawKey.replace(/\\n/g, '\n');
 
   return {
@@ -138,7 +134,7 @@ bot.action(/^reg_kelas_/, async (ctx) => {
   }
 });
 
-// 9. TANGKAP TEKS INPUT (NO ABSEN, NAMA, ALASAN)
+// 9. TANGKAP TEKS INPUT (NO ABSEN, NAMA, ALASAN IZIN/SAKIT)
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const user = db[userId];
@@ -172,14 +168,16 @@ bot.on('text', async (ctx) => {
     saveDB();
 
     const waktuNow = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
-    
+    const detailText = `[${user.noAbsen}] ${user.nama} - ${text} - [${status}]`;
+    const usernameTg = ctx.from.username ? `@${ctx.from.username}` : '-';
+
     try {
       await sheets.spreadsheets.values.append({
         spreadsheetId: process.env.SPREADSHEET_ID,
-        range: `'${user.kelas}'!A:G`,
+        range: `'${user.kelas}'!A:F`,
         valueInputOption: 'USER_ENTERED',
         requestBody: {
-          values: [[waktuNow, user.noAbsen, user.nama, status, `Alasan: ${text}`, '-', '-']]
+          values: [[waktuNow, detailText, '-', usernameTg, '-', '-']]
         }
       });
       ctx.reply(`✅ *BERHASIL DICATAT!*\n\nStatus: *${status}*\nAlasan: ${text}`, { parse_mode: 'Markdown' });
@@ -205,7 +203,7 @@ bot.on('photo', async (ctx) => {
     const fileLink = await ctx.telegram.getFileLink(photo.file_id);
 
     user.tempFotoUrl = fileLink.href;
-    user.tempCaption = ctx.message.caption || 'Kegiatan PKL';
+    user.tempCaption = ctx.message.caption || 'kegiatan';
     user.step = 'WAITING_LOCATION';
     saveDB();
 
@@ -219,7 +217,7 @@ bot.on('photo', async (ctx) => {
   }
 });
 
-// 11. TANGKAP LOKASI & SIMPAN KE GOOGLE SHEETS
+// 11. TANGKAP LOKASI & SIMPAN FORMAT PAS KE GOOGLE SHEETS
 bot.on('location', async (ctx) => {
   const userId = ctx.from.id;
   const user = db[userId];
@@ -245,14 +243,17 @@ bot.on('location', async (ctx) => {
   }
 
   const waktuNow = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+  const detailText = `[${user.noAbsen}] ${user.nama} - ${user.tempCaption} - [HADIR]`;
+  const fotoFormula = `=HYPERLINK("${user.tempFotoUrl}", "🖼️ Lihat Foto")`;
+  const usernameTg = ctx.from.username ? `@${ctx.from.username}` : '-';
 
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SPREADSHEET_ID,
-      range: `'${user.kelas}'!A:G`,
+      range: `'${user.kelas}'!A:F`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
-        values: [[waktuNow, user.noAbsen, user.nama, `HADIR (${user.tempCaption})`, alamatLengkap, mapsUrl, user.tempFotoUrl]]
+        values: [[waktuNow, detailText, fotoFormula, usernameTg, alamatLengkap, mapsUrl]]
       }
     });
 
@@ -266,8 +267,8 @@ bot.on('location', async (ctx) => {
 
 📁 *Tab Sheet:* ${user.kelas}
 📅 *Waktu:* ${waktuNow}
-📝 *Detail:* ${user.noAbsen} ${user.nama} - HADIR
-📌 *Kegiatan:* ${user.tempCaption}
+📝 *Detail:* ${detailText}
+👤 *Username:* ${usernameTg}
 📍 *Alamat:* ${alamatLengkap}
 🔗 *Maps:* [Lihat Titik GPS](${mapsUrl})
 🖼️ *Foto:* [Lihat Bukti Foto](${user.tempFotoUrl})`;
