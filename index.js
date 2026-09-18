@@ -116,11 +116,18 @@ bot.command('sakit', (ctx) => {
   ctx.reply('🤒 Silakan ketik *ALASAN SAKIT* kamu (dan melampirkan keterangan):', { parse_mode: 'Markdown' });
 });
 
-// 8. TANGKAP TOMBOL KELAS
+// 8. TANGKAP TOMBOL KELAS (PROTEKSI GANDA & PREVENT RE-CLICK)
 bot.action(/^reg_kelas_/, async (ctx) => {
   try {
-    await ctx.answerCbQuery();
     const userId = ctx.from.id;
+
+    // Proteksi: Jika user sudah terdaftar lengkap, tolak pemilihan kelas dari tombol lama!
+    if (db[userId] && db[userId].nama) {
+      await ctx.answerCbQuery('⚠️ Kamu sudah terdaftar! Ketik /reset jika ingin mengganti profil.', { show_alert: true });
+      return;
+    }
+
+    await ctx.answerCbQuery();
     const kelas = ctx.match.input.replace('reg_kelas_', '');
 
     db[userId] = db[userId] || {};
@@ -128,7 +135,13 @@ bot.action(/^reg_kelas_/, async (ctx) => {
     db[userId].step = 'WAITING_NO_ABSEN';
     saveDB();
 
-    await ctx.reply(`✅ *Kelas dipilih: ${kelas}*\n\nSekarang ketik *NOMOR ABSEN* kamu (Contoh: 05 atau 12):`, { parse_mode: 'Markdown' });
+    // Hapus/Edit menu tombol lama agar tidak bisa diklik ulang (Cegah Bug Dobel)
+    try {
+      await ctx.editMessageText(`✅ *Kelas dipilih: ${kelas}*\n\nSekarang ketik *NOMOR ABSEN* kamu (Contoh: 05 atau 12):`, { parse_mode: 'Markdown' });
+    } catch (e) {
+      await ctx.reply(`✅ *Kelas dipilih: ${kelas}*\n\nSekarang ketik *NOMOR ABSEN* kamu (Contoh: 05 atau 12):`, { parse_mode: 'Markdown' });
+    }
+
   } catch (err) {
     console.error('Error action:', err.message);
   }
