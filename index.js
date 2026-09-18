@@ -19,24 +19,35 @@ function saveDB() {
 // 2. Inisialisasi Bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// 3. Inisialisasi Google Sheets API (Base64 + Fallback Plain)
-let credentials = {};
-if (process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
-  try {
-    const jsonString = Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf-8');
-    credentials = JSON.parse(jsonString);
-  } catch (e) {
-    console.error('Error parsing Base64 Credentials:', e.message);
+// 3. Helper Parser Kredensial Anti-Fail
+function getGoogleCredentials() {
+  // Opsi A: Jika pakai GOOGLE_SERVICE_ACCOUNT_BASE64
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
+    try {
+      const decoded = Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_BASE64.trim(), 'base64').toString('utf-8');
+      return JSON.parse(decoded);
+    } catch (e) {
+      console.error('Gagal decode GOOGLE_SERVICE_ACCOUNT_BASE64:', e.message);
+    }
   }
-} else {
-  credentials = {
+
+  // Opsi B: Jika pakai GOOGLE_PRIVATE_KEY & GOOGLE_CLIENT_EMAIL biasa
+  let rawKey = process.env.GOOGLE_PRIVATE_KEY || '';
+  // Bersihkan tanda petik pembungkus (jika ada)
+  if (rawKey.startsWith('"') && rawKey.endsWith('"')) {
+    rawKey = rawKey.slice(1, -1);
+  }
+  // Konversi literal \n menjadi character newline asli
+  const formattedPrivateKey = rawKey.replace(/\\n/g, '\n');
+
+  return {
     client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    private_key: formattedPrivateKey,
   };
 }
 
 const auth = new google.auth.GoogleAuth({
-  credentials,
+  credentials: getGoogleCredentials(),
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 const sheets = google.sheets({ version: 'v4', auth });
@@ -109,10 +120,10 @@ bot.command('sakit', (ctx) => {
   ctx.reply('🤒 Silakan ketik *ALASAN SAKIT* kamu (dan melampirkan keterangan):', { parse_mode: 'Markdown' });
 });
 
-// 8. TANGKAP TOMBOL KELAS (Dua-duanya: bot.action & regex)
+// 8. TANGKAP TOMBOL KELAS
 bot.action(/^reg_kelas_/, async (ctx) => {
   try {
-    await ctx.answerCbQuery(); // Menghilangkan icon loading di tombol Telegram
+    await ctx.answerCbQuery();
     const userId = ctx.from.id;
     const kelas = ctx.match.input.replace('reg_kelas_', '');
 
