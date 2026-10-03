@@ -49,19 +49,20 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: 'v4', auth });
 
-// Helper Sanitasi ID Spreadsheet
-function getCleanSpreadsheetId() {
-  const rawId = process.env.SPREADSHEET_ID || '';
-  return rawId.trim();
+// Helper Sanitasi Spreadsheet ID (Membersihkan spasi tersembunyi)
+function getSpreadsheetId() {
+  return (process.env.SPREADSHEET_ID || '').trim();
 }
 
-// Helper Upload Foto ke ImgBB (Mendapatkan Link Permanen)
+// Helper Upload ImgBB untuk Link Permanen
 async function uploadToImgBB(fileUrl) {
   try {
+    const apiKey = (process.env.IMGBB_API_KEY || '').trim();
+    if (!apiKey) return fileUrl;
+
     const form = new FormData();
     form.append('image', fileUrl);
 
-    const apiKey = process.env.IMGBB_API_KEY ? process.env.IMGBB_API_KEY.trim() : '';
     const response = await axios.post(
       `https://api.imgbb.com/1/upload?key=${apiKey}`,
       form,
@@ -70,8 +71,8 @@ async function uploadToImgBB(fileUrl) {
 
     return response.data.data.url;
   } catch (err) {
-    console.error('ImgBB Upload Error:', err.message);
-    return fileUrl; // Fallback jika upload ImgBB gagal
+    console.error('ImgBB Upload Fallback:', err.message);
+    return fileUrl; // Jika ImgBB bermasalah, kembali ke link telegram
   }
 }
 
@@ -136,7 +137,7 @@ bot.command('izin', (ctx) => {
 
 bot.command('sakit', (ctx) => {
   const userId = ctx.from.id;
-  if (!db[userId] || !db[userId].nama) return ctx.reply('⚠️ Kamu belum daftar profil! Ketik /start dulu.');
+  if (!db[userId] || !db[userId].nama) return ctx.reply('⚠️️ Kamu belum daftar profil! Ketik /start dulu.');
   
   db[userId].step = 'WAITING_ALASAN_SAKIT';
   saveDB();
@@ -148,7 +149,6 @@ bot.action(/^reg_kelas_/, async (ctx) => {
   try {
     const userId = ctx.from.id;
 
-    // Proteksi: Jika user sudah terdaftar lengkap, tolak pemilihan kelas dari tombol lama!
     if (db[userId] && db[userId].nama) {
       await ctx.answerCbQuery('⚠️ Kamu sudah terdaftar! Ketik /reset jika ingin mengganti profil.', { show_alert: true });
       return;
@@ -162,7 +162,6 @@ bot.action(/^reg_kelas_/, async (ctx) => {
     db[userId].step = 'WAITING_NO_ABSEN';
     saveDB();
 
-    // Hapus/Edit menu tombol lama agar tidak bisa diklik ulang (Cegah Bug Dobel)
     try {
       await ctx.editMessageText(`✅ *Kelas dipilih: ${kelas}*\n\nSekarang ketik *NOMOR ABSEN* kamu (Contoh: 05 atau 12):`, { parse_mode: 'Markdown' });
     } catch (e) {
@@ -213,7 +212,7 @@ bot.on('text', async (ctx) => {
 
     try {
       await sheets.spreadsheets.values.append({
-        spreadsheetId: getCleanSpreadsheetId(),
+        spreadsheetId: getSpreadsheetId(),
         range: `'${user.kelas}'!A:F`,
         valueInputOption: 'USER_ENTERED',
         requestBody: {
@@ -227,7 +226,7 @@ bot.on('text', async (ctx) => {
   }
 });
 
-// 10. TANGKAP FOTO KEGIATAN (DENGAN UPLOAD IMGBB PERMANEN)
+// 10. TANGKAP FOTO KEGIATAN (SAMA SEPERTI KODE AWAL + IMGBB PERMANEN)
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
   const user = db[userId];
@@ -236,13 +235,13 @@ bot.on('photo', async (ctx) => {
     return ctx.reply('⚠️ Kamu belum terdaftar! Ketik /start terlebih dahulu.');
   }
 
-  const msgLoading = await ctx.reply('⏳ *Memproses & menyimpan foto permanen...*', { parse_mode: 'Markdown' });
+  const msgLoading = await ctx.reply('⏳ *Memproses foto kegiatan...*', { parse_mode: 'Markdown' });
 
   try {
     const photo = ctx.message.photo[ctx.message.photo.length - 1];
     const fileLink = await ctx.telegram.getFileLink(photo.file_id);
 
-    // Upload ke ImgBB untuk menjadikan link permanen
+    // Dapatkan link permanen dari ImgBB (jika gagal/tidak ada key, fallback ke link telegram)
     const permanentUrl = await uploadToImgBB(fileLink.href);
 
     user.tempFotoUrl = permanentUrl;
@@ -266,7 +265,7 @@ bot.on('location', async (ctx) => {
   const user = db[userId];
 
   if (!user || user.step !== 'WAITING_LOCATION') {
-    return ctx.reply('⚠️ Silakan kirim foto kegiatan terlebih dahulu sebelum mengirim lokasi.');
+    return ctx.reply('⚠️️ Silakan kirim foto kegiatan terlebih dahulu sebelum mengirim lokasi.');
   }
 
   const msgLoading = await ctx.reply('⏳ *Memproses alamat lokasi & menyimpan ke sheet kelas...*', { parse_mode: 'Markdown' });
@@ -292,7 +291,7 @@ bot.on('location', async (ctx) => {
 
   try {
     await sheets.spreadsheets.values.append({
-      spreadsheetId: getCleanSpreadsheetId(),
+      spreadsheetId: getSpreadsheetId(),
       range: `'${user.kelas}'!A:F`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
