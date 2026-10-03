@@ -49,7 +49,7 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: 'v4', auth });
 
-// Helper Upload Foto Telegram ke ImgBB (Link Permanen Abadi)
+// Helper Upload Foto Telegram ke ImgBB (Link Permanen)
 async function uploadToImgBB(fileUrl) {
   try {
     const form = new FormData();
@@ -61,10 +61,10 @@ async function uploadToImgBB(fileUrl) {
       { headers: form.getHeaders() }
     );
 
-    return response.data.data.url; // Link Permanen ImgBB
+    return response.data.data.url;
   } catch (err) {
     console.error('ImgBB Upload Error:', err.message);
-    return fileUrl; // Fallback jika gagal upload
+    return fileUrl; // Fallback jika ImgBB gagal
   }
 }
 
@@ -136,7 +136,7 @@ bot.command('sakit', (ctx) => {
   ctx.reply('🤒 Silakan ketik *ALASAN SAKIT* kamu (dan melampirkan keterangan):', { parse_mode: 'Markdown' });
 });
 
-// 8. TANGKAP TOMBOL KELAS (PROTEKSI CEGAH BUGBOT & CEGAH KLIK ULANG)
+// 8. TANGKAP TOMBOL KELAS
 bot.action(/^reg_kelas_/, async (ctx) => {
   try {
     const userId = ctx.from.id;
@@ -205,7 +205,7 @@ bot.on('text', async (ctx) => {
     try {
       await sheets.spreadsheets.values.append({
         spreadsheetId: process.env.SPREADSHEET_ID,
-        range: `'${user.kelas}'!A:F`,
+        range: `${user.kelas}!A:F`,
         valueInputOption: 'USER_ENTERED',
         requestBody: {
           values: [[waktuNow, detailText, '-', usernameTg, '-', '-']]
@@ -284,7 +284,7 @@ bot.on('location', async (ctx) => {
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SPREADSHEET_ID,
-      range: `'${user.kelas}'!A:F`,
+      range: `${user.kelas}!A:F`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[waktuNow, detailText, fotoFormula, usernameTg, alamatLengkap, mapsUrl]]
