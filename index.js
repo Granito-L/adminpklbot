@@ -3,6 +3,7 @@ const { google } = require('googleapis');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const FormData = require('form-data');
 
 // 1. Database Simpel (JSON File)
 const dbFile = path.join(__dirname, 'users_db.json');
@@ -19,7 +20,7 @@ function saveDB() {
 // 2. Inisialisasi Bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// 3. Helper Parser Kredensial Anti-Fail
+// 3. Helper Parser Kredensial Google Sheets
 function getGoogleCredentials() {
   if (process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
     try {
@@ -47,6 +48,25 @@ const auth = new google.auth.GoogleAuth({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 const sheets = google.sheets({ version: 'v4', auth });
+
+// Helper Upload Foto Telegram ke ImgBB (Link Permanen Abadi)
+async function uploadToImgBB(fileUrl) {
+  try {
+    const form = new FormData();
+    form.append('image', fileUrl);
+
+    const response = await axios.post(
+      `https://api.imgbb.com/1/upload?key=${process.env.IMGBB_API_KEY}`,
+      form,
+      { headers: form.getHeaders() }
+    );
+
+    return response.data.data.url; // Link Permanen ImgBB
+  } catch (err) {
+    console.error('ImgBB Upload Error:', err.message);
+    return fileUrl; // Fallback jika gagal upload
+  }
+}
 
 // 4. Daftar Kelas
 const daftarKelas = [
@@ -116,12 +136,11 @@ bot.command('sakit', (ctx) => {
   ctx.reply('🤒 Silakan ketik *ALASAN SAKIT* kamu (dan melampirkan keterangan):', { parse_mode: 'Markdown' });
 });
 
-// 8. TANGKAP TOMBOL KELAS (PROTEKSI GANDA & PREVENT RE-CLICK)
+// 8. TANGKAP TOMBOL KELAS (PROTEKSI CEGAH BUGBOT & CEGAH KLIK ULANG)
 bot.action(/^reg_kelas_/, async (ctx) => {
   try {
     const userId = ctx.from.id;
 
-    // Proteksi: Jika user sudah terdaftar lengkap, tolak pemilihan kelas dari tombol lama!
     if (db[userId] && db[userId].nama) {
       await ctx.answerCbQuery('⚠️ Kamu sudah terdaftar! Ketik /reset jika ingin mengganti profil.', { show_alert: true });
       return;
@@ -135,7 +154,6 @@ bot.action(/^reg_kelas_/, async (ctx) => {
     db[userId].step = 'WAITING_NO_ABSEN';
     saveDB();
 
-    // Hapus/Edit menu tombol lama agar tidak bisa diklik ulang (Cegah Bug Dobel)
     try {
       await ctx.editMessageText(`✅ *Kelas dipilih: ${kelas}*\n\nSekarang ketik *NOMOR ABSEN* kamu (Contoh: 05 atau 12):`, { parse_mode: 'Markdown' });
     } catch (e) {
@@ -200,7 +218,7 @@ bot.on('text', async (ctx) => {
   }
 });
 
-// 10. TANGKAP FOTO KEGIATAN
+// 10. TANGKAP FOTO KEGIATAN & UPLOAD KE IMGBB
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
   const user = db[userId];
@@ -209,20 +227,23 @@ bot.on('photo', async (ctx) => {
     return ctx.reply('⚠️ Kamu belum terdaftar! Ketik /start terlebih dahulu.');
   }
 
-  const msgLoading = await ctx.reply('⏳ *Memproses foto kegiatan...*', { parse_mode: 'Markdown' });
+  const msgLoading = await ctx.reply('⏳ *Memproses foto & mengunggah ke penyimpanan permanen...*', { parse_mode: 'Markdown' });
 
   try {
     const photo = ctx.message.photo[ctx.message.photo.length - 1];
     const fileLink = await ctx.telegram.getFileLink(photo.file_id);
 
-    user.tempFotoUrl = fileLink.href;
+    // Upload foto ke ImgBB
+    const imgbbPermanenUrl = await uploadToImgBB(fileLink.href);
+
+    user.tempFotoUrl = imgbbPermanenUrl;
     user.tempCaption = ctx.message.caption || 'kegiatan';
     user.step = 'WAITING_LOCATION';
     saveDB();
 
     ctx.deleteMessage(msgLoading.message_id).catch(() => {});
     ctx.reply(
-      `📸 *Foto Berhasil Diterima!*\n\nSekarang, silakan *Share Current Location (GPS)* kamu lewat menu lampiran Telegram untuk menyelesaikan absensi.`,
+      `📸 *Foto Berhasil Disimpan Permanen!*\n\nSekarang, silakan *Share Current Location (GPS)* kamu lewat menu lampiran Telegram untuk menyelesaikan absensi.`,
       { parse_mode: 'Markdown' }
     );
   } catch (err) {
@@ -230,7 +251,7 @@ bot.on('photo', async (ctx) => {
   }
 });
 
-// 11. TANGKAP LOKASI & SIMPAN FORMAT PAS KE GOOGLE SHEETS
+// 11. TANGKAP LOKASI & SIMPAN FORMAT HYPERLINK KE GOOGLE SHEETS
 bot.on('location', async (ctx) => {
   const userId = ctx.from.id;
   const user = db[userId];
@@ -284,7 +305,7 @@ bot.on('location', async (ctx) => {
 👤 *Username:* ${usernameTg}
 📍 *Alamat:* ${alamatLengkap}
 🔗 *Maps:* [Lihat Titik GPS](${mapsUrl})
-🖼️ *Foto:* [Lihat Bukti Foto](${user.tempFotoUrl})`;
+🖼️ *Foto Permanen:* [Lihat Bukti Foto](${user.tempFotoUrl})`;
 
     ctx.replyWithMarkdown(replyText, { disable_web_page_preview: false });
 
