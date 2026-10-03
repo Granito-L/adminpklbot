@@ -20,7 +20,7 @@ function saveDB() {
 // 2. Inisialisasi Bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// 3. Helper Parser Kredensial Google Sheets
+// 3. Helper Parser Kredensial Anti-Fail
 function getGoogleCredentials() {
   if (process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
     try {
@@ -49,28 +49,29 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: 'v4', auth });
 
-// Helper Sanitasi Spreadsheet ID
-function getSpreadsheetId() {
+// Helper Sanitasi ID Spreadsheet
+function getCleanSpreadsheetId() {
   const rawId = process.env.SPREADSHEET_ID || '';
   return rawId.trim();
 }
 
-// Helper Upload Foto Telegram ke ImgBB (Link Permanen)
+// Helper Upload Foto ke ImgBB (Mendapatkan Link Permanen)
 async function uploadToImgBB(fileUrl) {
   try {
     const form = new FormData();
     form.append('image', fileUrl);
 
+    const apiKey = process.env.IMGBB_API_KEY ? process.env.IMGBB_API_KEY.trim() : '';
     const response = await axios.post(
-      `https://api.imgbb.com/1/upload?key=${process.env.IMGBB_API_KEY ? process.env.IMGBB_API_KEY.trim() : ''}`,
+      `https://api.imgbb.com/1/upload?key=${apiKey}`,
       form,
       { headers: form.getHeaders() }
     );
 
     return response.data.data.url;
   } catch (err) {
-    console.error('ImgBB Upload Error:', err.response ? err.response.data : err.message);
-    return fileUrl; // Fallback ke link telegram jika gagal
+    console.error('ImgBB Upload Error:', err.message);
+    return fileUrl; // Fallback jika upload ImgBB gagal
   }
 }
 
@@ -142,11 +143,12 @@ bot.command('sakit', (ctx) => {
   ctx.reply('🤒 Silakan ketik *ALASAN SAKIT* kamu (dan melampirkan keterangan):', { parse_mode: 'Markdown' });
 });
 
-// 8. TANGKAP TOMBOL KELAS
+// 8. TANGKAP TOMBOL KELAS (PROTEKSI GANDA & PREVENT RE-CLICK)
 bot.action(/^reg_kelas_/, async (ctx) => {
   try {
     const userId = ctx.from.id;
 
+    // Proteksi: Jika user sudah terdaftar lengkap, tolak pemilihan kelas dari tombol lama!
     if (db[userId] && db[userId].nama) {
       await ctx.answerCbQuery('⚠️ Kamu sudah terdaftar! Ketik /reset jika ingin mengganti profil.', { show_alert: true });
       return;
@@ -160,6 +162,7 @@ bot.action(/^reg_kelas_/, async (ctx) => {
     db[userId].step = 'WAITING_NO_ABSEN';
     saveDB();
 
+    // Hapus/Edit menu tombol lama agar tidak bisa diklik ulang (Cegah Bug Dobel)
     try {
       await ctx.editMessageText(`✅ *Kelas dipilih: ${kelas}*\n\nSekarang ketik *NOMOR ABSEN* kamu (Contoh: 05 atau 12):`, { parse_mode: 'Markdown' });
     } catch (e) {
@@ -210,7 +213,7 @@ bot.on('text', async (ctx) => {
 
     try {
       await sheets.spreadsheets.values.append({
-        spreadsheetId: getSpreadsheetId(),
+        spreadsheetId: getCleanSpreadsheetId(),
         range: `'${user.kelas}'!A:F`,
         valueInputOption: 'USER_ENTERED',
         requestBody: {
@@ -219,13 +222,12 @@ bot.on('text', async (ctx) => {
       });
       ctx.reply(`✅ *BERHASIL DICATAT!*\n\nStatus: *${status}*\nAlasan: ${text}`, { parse_mode: 'Markdown' });
     } catch (err) {
-      console.error('Google Sheets Error (Izin/Sakit):', err.response ? err.response.data : err.message);
       ctx.reply(`❌ Gagal menyimpan ke Sheets: ${err.message}`);
     }
   }
 });
 
-// 10. TANGKAP FOTO KEGIATAN & UPLOAD KE IMGBB
+// 10. TANGKAP FOTO KEGIATAN (DENGAN UPLOAD IMGBB PERMANEN)
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
   const user = db[userId];
@@ -234,32 +236,31 @@ bot.on('photo', async (ctx) => {
     return ctx.reply('⚠️ Kamu belum terdaftar! Ketik /start terlebih dahulu.');
   }
 
-  const msgLoading = await ctx.reply('⏳ *Memproses foto & mengunggah ke penyimpanan permanen...*', { parse_mode: 'Markdown' });
+  const msgLoading = await ctx.reply('⏳ *Memproses & menyimpan foto permanen...*', { parse_mode: 'Markdown' });
 
   try {
     const photo = ctx.message.photo[ctx.message.photo.length - 1];
     const fileLink = await ctx.telegram.getFileLink(photo.file_id);
 
-    // Upload foto ke ImgBB
-    const imgbbPermanenUrl = await uploadToImgBB(fileLink.href);
+    // Upload ke ImgBB untuk menjadikan link permanen
+    const permanentUrl = await uploadToImgBB(fileLink.href);
 
-    user.tempFotoUrl = imgbbPermanenUrl;
+    user.tempFotoUrl = permanentUrl;
     user.tempCaption = ctx.message.caption || 'kegiatan';
     user.step = 'WAITING_LOCATION';
     saveDB();
 
     ctx.deleteMessage(msgLoading.message_id).catch(() => {});
     ctx.reply(
-      `📸 *Foto Berhasil Disimpan Permanen!*\n\nSekarang, silakan *Share Current Location (GPS)* kamu lewat menu lampiran Telegram untuk menyelesaikan absensi.`,
+      `📸 *Foto Berhasil Diterima!*\n\nSekarang, silakan *Share Current Location (GPS)* kamu lewat menu lampiran Telegram untuk menyelesaikan absensi.`,
       { parse_mode: 'Markdown' }
     );
   } catch (err) {
-    console.error('Photo Process Error:', err.message);
     ctx.reply(`❌ Gagal memproses foto: ${err.message}`);
   }
 });
 
-// 11. TANGKAP LOKASI & SIMPAN FORMAT HYPERLINK KE GOOGLE SHEETS
+// 11. TANGKAP LOKASI & SIMPAN FORMAT PAS KE GOOGLE SHEETS
 bot.on('location', async (ctx) => {
   const userId = ctx.from.id;
   const user = db[userId];
@@ -291,7 +292,7 @@ bot.on('location', async (ctx) => {
 
   try {
     await sheets.spreadsheets.values.append({
-      spreadsheetId: getSpreadsheetId(),
+      spreadsheetId: getCleanSpreadsheetId(),
       range: `'${user.kelas}'!A:F`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
@@ -313,12 +314,11 @@ bot.on('location', async (ctx) => {
 👤 *Username:* ${usernameTg}
 📍 *Alamat:* ${alamatLengkap}
 🔗 *Maps:* [Lihat Titik GPS](${mapsUrl})
-🖼️ *Foto Permanen:* [Lihat Bukti Foto](${user.tempFotoUrl})`;
+🖼️ *Foto:* [Lihat Bukti Foto](${user.tempFotoUrl})`;
 
     ctx.replyWithMarkdown(replyText, { disable_web_page_preview: false });
 
   } catch (err) {
-    console.error('Google Sheets Error (Hadir):', err.response ? err.response.data : err.message);
     ctx.reply(`❌ Gagal menyimpan ke Google Sheets: ${err.message}`);
   }
 });
