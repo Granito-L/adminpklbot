@@ -49,6 +49,12 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: 'v4', auth });
 
+// Helper Sanitasi Spreadsheet ID
+function getSpreadsheetId() {
+  const rawId = process.env.SPREADSHEET_ID || '';
+  return rawId.trim();
+}
+
 // Helper Upload Foto Telegram ke ImgBB (Link Permanen)
 async function uploadToImgBB(fileUrl) {
   try {
@@ -56,15 +62,15 @@ async function uploadToImgBB(fileUrl) {
     form.append('image', fileUrl);
 
     const response = await axios.post(
-      `https://api.imgbb.com/1/upload?key=${process.env.IMGBB_API_KEY}`,
+      `https://api.imgbb.com/1/upload?key=${process.env.IMGBB_API_KEY ? process.env.IMGBB_API_KEY.trim() : ''}`,
       form,
       { headers: form.getHeaders() }
     );
 
     return response.data.data.url;
   } catch (err) {
-    console.error('ImgBB Upload Error:', err.message);
-    return fileUrl; // Fallback jika ImgBB gagal
+    console.error('ImgBB Upload Error:', err.response ? err.response.data : err.message);
+    return fileUrl; // Fallback ke link telegram jika gagal
   }
 }
 
@@ -204,8 +210,8 @@ bot.on('text', async (ctx) => {
 
     try {
       await sheets.spreadsheets.values.append({
-        spreadsheetId: process.env.SPREADSHEET_ID,
-        range: `${user.kelas}!A:F`,
+        spreadsheetId: getSpreadsheetId(),
+        range: `'${user.kelas}'!A:F`,
         valueInputOption: 'USER_ENTERED',
         requestBody: {
           values: [[waktuNow, detailText, '-', usernameTg, '-', '-']]
@@ -213,6 +219,7 @@ bot.on('text', async (ctx) => {
       });
       ctx.reply(`✅ *BERHASIL DICATAT!*\n\nStatus: *${status}*\nAlasan: ${text}`, { parse_mode: 'Markdown' });
     } catch (err) {
+      console.error('Google Sheets Error (Izin/Sakit):', err.response ? err.response.data : err.message);
       ctx.reply(`❌ Gagal menyimpan ke Sheets: ${err.message}`);
     }
   }
@@ -247,6 +254,7 @@ bot.on('photo', async (ctx) => {
       { parse_mode: 'Markdown' }
     );
   } catch (err) {
+    console.error('Photo Process Error:', err.message);
     ctx.reply(`❌ Gagal memproses foto: ${err.message}`);
   }
 });
@@ -283,8 +291,8 @@ bot.on('location', async (ctx) => {
 
   try {
     await sheets.spreadsheets.values.append({
-      spreadsheetId: process.env.SPREADSHEET_ID,
-      range: `${user.kelas}!A:F`,
+      spreadsheetId: getSpreadsheetId(),
+      range: `'${user.kelas}'!A:F`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[waktuNow, detailText, fotoFormula, usernameTg, alamatLengkap, mapsUrl]]
@@ -310,6 +318,7 @@ bot.on('location', async (ctx) => {
     ctx.replyWithMarkdown(replyText, { disable_web_page_preview: false });
 
   } catch (err) {
+    console.error('Google Sheets Error (Hadir):', err.response ? err.response.data : err.message);
     ctx.reply(`❌ Gagal menyimpan ke Google Sheets: ${err.message}`);
   }
 });
